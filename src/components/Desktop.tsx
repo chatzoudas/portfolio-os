@@ -26,7 +26,7 @@ interface WindowState {
     y: number;
     width?: number;
     height?: number;
-    focusSignal?: number; // Add a signal to force un-minimize
+    focusSignal?: number;
     centered?: boolean;
 }
 
@@ -59,7 +59,6 @@ const apps: AppConfig[] = [
         icon: '/icons/phone.png',
         component: 'PopupMessage'
     }
-    // Add more apps here
 ];
 
 const Desktop: React.FC = () => {
@@ -95,7 +94,6 @@ const Desktop: React.FC = () => {
                 centered: true
             };
             setWindows(prev => {
-                // Prevent duplicate windows in React strict mode
                 if (prev.some(w => w.appId === 'popup-message')) {
                     return prev;
                 }

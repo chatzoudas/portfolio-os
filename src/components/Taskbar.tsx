@@ -146,7 +146,6 @@ const Taskbar: React.FC<TaskbarProps> = ({ activeWindows, onWindowClick, apps, o
                         className={`window-button ${window.isActive ? 'active' : ''}`}
                         onClick={() => onWindowClick(window.id)}
                         onTouchEnd={() => {
-                            // Only trigger if not scrolling
                             onWindowClick(window.id);
                         }}
                     >

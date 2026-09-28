@@ -1,11 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import useGazeTracking from './useGazeTracking';
-import './FaceTracker.css'; // Optional styling
+import './FaceTracker.css';
 
-/**
- * FaceTracker Component
- * Displays a face that follows mouse/touch movement
- */
 type FaceTrackerProps = {
   className?: string;
   basePath?: string;

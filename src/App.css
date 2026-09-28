@@ -51,14 +51,14 @@ li {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 400px; /* adjust size as needed */
-  height: 400px; /* adjust size as needed */
+  width: 400px;
+  height: 400px;
   background-image: url("/wallpaper.webp");
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
-  opacity: 0.7; /* adjust transparency as needed */
-  pointer-events: none; /* prevents image from interfering with desktop interactions */
+  opacity: 0.7;
+  pointer-events: none;
 }
 
 .desktop-content {
@@ -326,7 +326,6 @@ ul {
   }
 }
 
-/* ---------- Pac-Man ---------- */
 .pac98-wrap {
   display: flex;
   flex-direction: column;
@@ -415,7 +414,6 @@ ul {
   border: 2px solid #2121de;
 }
 
-/* ---------- Solitaire ---------- */
 .sol98-shell {
   padding: 10px;
   width: 100%;
@@ -545,7 +543,6 @@ ul {
   cursor: pointer;
 }
 
-/* Pacman D-Pad keys are hidden on PC and shown only on mobile viewports */
 .pac98-dpad {
   display: none;
   flex-direction: column;

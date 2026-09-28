@@ -63,16 +63,9 @@ const Window: React.FC<WindowProps> = ({
 
     const [prevSize, setPrevSize] = useState({ width: size.width, height: size.height, x: position.x, y: position.y });
 
-    // Tracks whether the user has manually resized/moved the window. Until they do, the window
-    // is free to re-derive its "natural" size (and, if `centered`, its centered position) on
-    // browser resize events. This matters when the page is embedded in an iframe on another
-    // site: the iframe can report a very small innerWidth/innerHeight for its first render
-    // (before the host page finishes laying it out), which would otherwise permanently lock
-    // the window into a tiny, off-center, mobile-scaled layout.
     const hasUserResizedRef = useRef(false);
     const hasUserMovedRef = useRef(false);
 
-    // Restore minimized window if it gets clicked/activated via the taskbar
     useEffect(() => {
         if (focusSignal) {
             const t = setTimeout(() => setIsMinimized(false), 0);
@@ -87,20 +80,15 @@ const Window: React.FC<WindowProps> = ({
         const width = Math.max(MIN_WIDTH, Math.min(next.width, maxWidth));
         const height = Math.max(MIN_HEIGHT, Math.min(next.height, maxHeight));
 
-        // Let windows be dragged off-screen horizontally, but keep an edge visible
         let x = Math.min(next.x, window.innerWidth - 30);
         x = Math.max(x, -width + 30);
 
-        // Keep the title bar reachable on the Y axis
         let y = Math.max(0, next.y);
         y = Math.min(y, window.innerHeight - TASKBAR_HEIGHT - 30);
 
         return { x, y, width, height };
     }, []);
 
-    // Enforce viewport boundaries upon window resizing, and re-derive the natural size (and,
-    // for centered windows, the centered position) for windows the user hasn't manually
-    // resized/moved yet (see hasUserResizedRef/hasUserMovedRef above).
     useEffect(() => {
         const handleBrowserResize = () => {
             if (isMaximized) return;
@@ -269,7 +257,6 @@ const Window: React.FC<WindowProps> = ({
             nextY = start.y + dy;
         }
 
-        // Enforce min size while keeping the opposite edge anchored
         if (nextWidth < MIN_WIDTH) {
             const diff = MIN_WIDTH - nextWidth;
             nextWidth = MIN_WIDTH;
@@ -282,8 +269,6 @@ const Window: React.FC<WindowProps> = ({
             if (resizingTop) nextY -= diff;
         }
 
-        // Clamp to viewport; for left/top resizing this may adjust both x/y and size.
-        // To better mimic OS behavior, manually handle left/top clamping to 0 so size shrinks.
         if (resizingLeft && nextX < 0) {
             nextWidth = nextWidth + nextX;
             nextX = 0;
@@ -293,7 +278,6 @@ const Window: React.FC<WindowProps> = ({
             nextY = 0;
         }
 
-        // Right/bottom boundaries
         const maxRight = window.innerWidth;
         const maxBottom = window.innerHeight - TASKBAR_HEIGHT;
         if (resizingRight && nextX + nextWidth > maxRight) {
@@ -322,7 +306,6 @@ const Window: React.FC<WindowProps> = ({
                 y: position.y
             });
             setPosition({ x: 0, y: 0 });
-            // Adjust height to account for taskbar
             setSize({
                 width: window.innerWidth,
                 height: window.innerHeight - TASKBAR_HEIGHT
@@ -340,7 +323,7 @@ const Window: React.FC<WindowProps> = ({
     };
 
     const handleClose = (e: React.MouseEvent | React.PointerEvent) => {
-        e.stopPropagation(); // Prevent event bubbling
+        e.stopPropagation();
         onClose();
     };
 

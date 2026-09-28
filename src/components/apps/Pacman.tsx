@@ -209,39 +209,35 @@ const Pacman: React.FC = () => {
 
     function makeGhosts(): Ghost[] {
         return [
-            // Blinky (Red) - Starts OUTSIDE the ghost house, roaming immediately
             {
                 row: 7, col: 9, startRow: 7, startCol: 9,
                 color: '#ff0000', frightenedColor: '#2121de',
                 dir: { dr: 0, dc: -1 },
-                scatterTarget: { row: 0, col: 18 }, // Top-Right corner
+                scatterTarget: { row: 0, col: 18 },
                 mode: 'scatter', released: true, releaseAt: 0,
                 returnRow: 7, returnCol: 9,
             },
-            // Pinky (Pink) - Starts INSIDE house (left side)
             {
                 row: 9, col: 8, startRow: 9, startCol: 8,
                 color: '#ffb8ff', frightenedColor: '#2121de',
                 dir: { dr: -1, dc: 0 },
-                scatterTarget: { row: 0, col: 0 }, // Top-Left corner
+                scatterTarget: { row: 0, col: 0 },
                 mode: 'house', released: false, releaseAt: 10,
                 returnRow: 9, returnCol: 8,
             },
-            // Inky (Cyan) - Starts INSIDE house (center)
             {
                 row: 9, col: 9, startRow: 9, startCol: 9,
                 color: '#00ffff', frightenedColor: '#2121de',
                 dir: { dr: -1, dc: 0 },
-                scatterTarget: { row: 20, col: 18 }, // Bottom-Right corner
+                scatterTarget: { row: 20, col: 18 },
                 mode: 'house', released: false, releaseAt: 30,
                 returnRow: 9, returnCol: 9,
             },
-            // Clyde (Orange) - Starts INSIDE house (right side)
             {
                 row: 9, col: 10, startRow: 9, startCol: 10,
                 color: '#ffb852', frightenedColor: '#2121de',
                 dir: { dr: -1, dc: 0 },
-                scatterTarget: { row: 20, col: 0 }, // Bottom-Left corner
+                scatterTarget: { row: 20, col: 0 },
                 mode: 'house', released: false, releaseAt: 60,
                 returnRow: 9, returnCol: 10,
             },

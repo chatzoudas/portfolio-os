@@ -5,6 +5,7 @@ import AboutMe from './apps/AboutMe';
 import Pacman from './apps/Pacman';
 import PopupMessage from './apps/PopupMessage';
 import Solitaire from './apps/Solitaire';
+import { spawnESheep } from './apps/esheep';
 
 
 
@@ -12,7 +13,9 @@ export interface AppConfig {
     id: string;
     title: string;
     icon: string;
-    component: 'AboutMe' | 'Pacman' | 'PopupMessage' | 'Solitaire';
+    // No component: launching the app performs an action (spawns a
+    // desktop sheep) instead of opening a window.
+    component?: 'AboutMe' | 'Pacman' | 'PopupMessage' | 'Solitaire';
     width?: number;
     height?: number;
 }
@@ -36,6 +39,11 @@ const apps: AppConfig[] = [
         title: 'About Me',
         icon: '/icon.webp',
         component: 'AboutMe'
+    },
+    {
+        id: 'esheep',
+        title: 'eSheep',
+        icon: '/icons/sheep.png'
     },
     {
         id: 'pacman',
@@ -115,6 +123,11 @@ const Desktop: React.FC = () => {
     };
 
     const handleIconOpen = (appId: string) => {
+        if (appId === 'esheep') {
+            spawnESheep().catch(err => console.error('Failed to spawn eSheep:', err));
+            return;
+        }
+
         const isMobile = window.innerWidth <= 768;
         if (isMobile) {
             const existing = windows.find(w => w.appId === appId);

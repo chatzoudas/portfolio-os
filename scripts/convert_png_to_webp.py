@@ -12,14 +12,10 @@ def convert_one(png_path: Path) -> Path:
 
     with Image.open(png_path) as im:
         im.load()
-
-        # Preserve alpha when present
         if im.mode in ("P", "LA"):
             im = im.convert("RGBA")
 
         w, h = im.size
-
-        # Lossless for small icons; lossy for large images to keep size reasonable.
         lossless = max(w, h) <= 512
         save_kwargs = {
             "format": "WEBP",

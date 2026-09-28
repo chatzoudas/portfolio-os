@@ -20,6 +20,18 @@ interface DropTarget {
     pileIndex?: number;
 }
 
+interface DragFloat {
+    source: DragSource;
+    cards: Card[];
+    x: number;
+    y: number;
+    sx: number;
+    sy: number;
+    offsetX: number;
+    offsetY: number;
+    moved: boolean;
+}
+
 interface BoardState {
     stock: Card[];
     waste: Card[];
@@ -80,20 +92,71 @@ function getTotalFoundationCards(foundations: Record<Suit, Card[]>): number {
     return SUITS.reduce((total, suit) => total + foundations[suit].length, 0);
 }
 
+const DESIGN_W = 518;
+const DESIGN_H = 530;
+const MAX_SCALE = 4;
+
 const Solitaire: React.FC = () => {
     const [board, setBoard] = React.useState<BoardState>(() => deal());
     const [status, setStatus] = React.useState('');
     const [selectedSource, setSelectedSource] = React.useState<DragSource | null>(null);
+    const [past, setPast] = React.useState<BoardState[]>([]);
+    const [scale, setScale] = React.useState(1);
+    const boardRef = React.useRef(board);
+    const shellRef = React.useRef<HTMLDivElement>(null);
+    const [floatDrag, setFloatDrag] = React.useState<DragFloat | null>(null);
+    const floatDragRef = React.useRef<DragFloat | null>(null);
+    const suppressClickRef = React.useRef(false);
+    const setFloat = (drag: DragFloat | null) => {
+        floatDragRef.current = drag;
+        setFloatDrag(drag);
+    };
+
+    React.useEffect(() => {
+        const shell = shellRef.current;
+        const parent = shell?.parentElement;
+        if (!shell || !parent) return;
+        const compute = () => {
+            const fit = Math.min((parent.clientWidth - 20) / DESIGN_W, (parent.clientHeight - 20) / DESIGN_H);
+            setScale(fit >= 1.05 ? Math.min(fit, MAX_SCALE) : 1);
+        };
+        compute();
+        const observer = new ResizeObserver(compute);
+        observer.observe(parent);
+        return () => observer.disconnect();
+    }, []);
+
+    const applyBoard = (updater: (previous: BoardState) => BoardState) => {
+        const snapshot = boardRef.current;
+        const next = updater(snapshot);
+        if (next === snapshot) return;
+        boardRef.current = next;
+        setBoard(next);
+        setPast(previous => [...previous.slice(-99), snapshot]);
+    };
 
     const newGame = () => {
-        setBoard(deal());
+        const fresh = deal();
+        boardRef.current = fresh;
+        setBoard(fresh);
+        setPast([]);
         setStatus('');
         setSelectedSource(null);
     };
 
+    const undo = () => {
+        if (past.length === 0) return;
+        const previous = past[past.length - 1];
+        boardRef.current = previous;
+        setBoard(previous);
+        setPast(past.slice(0, -1));
+        setSelectedSource(null);
+        setStatus(getTotalFoundationCards(previous.foundations) === 52 ? 'You win!' : '');
+    };
+
     const drawStock = () => {
         setSelectedSource(null);
-        setBoard(previous => {
+        applyBoard(previous => {
             if (previous.stock.length === 0) {
                 if (previous.waste.length === 0) return previous;
                 const stock = [...previous.waste].reverse().map(card => withFaceUp(card, false));
@@ -144,7 +207,7 @@ const Solitaire: React.FC = () => {
 
     const tryAutoFoundation = (source: DragSource) => {
         setSelectedSource(null);
-        setBoard(previous => {
+        applyBoard(previous => {
             let card: Card | undefined;
 
             if (source.type === 'waste') {
@@ -179,7 +242,7 @@ const Solitaire: React.FC = () => {
     };
 
     const handleDrop = (source: DragSource, destination: DropTarget) => {
-        setBoard(previous => {
+        applyBoard(previous => {
             let movingCards: Card[];
             let waste = previous.waste;
             let tableau = previous.tableau;
@@ -269,6 +332,94 @@ const Solitaire: React.FC = () => {
         });
     };
 
+    const getMovingCards = (state: BoardState, source: DragSource): Card[] | null => {
+        if (source.type === 'waste') {
+            if (!state.waste.length) return null;
+            return [state.waste[state.waste.length - 1]];
+        }
+        const column = state.tableau[source.pileIndex as number];
+        const moving = column.slice(source.cardIndex as number);
+        if (!moving.length || !moving[0].faceUp) return null;
+        return moving;
+    };
+
+    const dropFloatAt = (clientX: number, clientY: number, drag: DragFloat) => {
+        const target = document.elementFromPoint(clientX, clientY)?.closest('[data-sol-drop]');
+        const kind = target?.getAttribute('data-sol-drop');
+        if (!kind) return;
+        if (kind.startsWith('foundation:')) {
+            handleDrop(drag.source, { type: 'foundation', suit: kind.slice('foundation:'.length) as Suit });
+        } else if (kind.startsWith('tableau:')) {
+            handleDrop(drag.source, { type: 'tableau', pileIndex: Number(kind.slice('tableau:'.length)) });
+        }
+    };
+
+    const onCardPointerDown = (event: React.PointerEvent, source: DragSource) => {
+        if (event.pointerType !== 'mouse' || event.button !== 0) return;
+        const moving = getMovingCards(boardRef.current, source);
+        if (!moving) return;
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        setFloat({
+            source,
+            cards: moving,
+            x: event.clientX,
+            y: event.clientY,
+            sx: event.clientX,
+            sy: event.clientY,
+            offsetX: event.clientX - rect.left,
+            offsetY: event.clientY - rect.top,
+            moved: false,
+        });
+        setSelectedSource(null);
+    };
+
+    const isDragGhosted = (source: DragSource) => {
+        const drag = floatDrag;
+        if (!drag?.moved) return false;
+        if (drag.source.type !== source.type) return false;
+        if (source.type === 'waste') return true;
+        return drag.source.pileIndex === source.pileIndex && (source.cardIndex as number) >= (drag.source.cardIndex as number);
+    };
+
+    const guardedCardClick = (event: React.MouseEvent, source: DragSource) => {
+        if (suppressClickRef.current) {
+            suppressClickRef.current = false;
+            return;
+        }
+        handleCardTap(source, event);
+    };
+
+    React.useEffect(() => {
+        const onMove = (event: PointerEvent) => {
+            const drag = floatDragRef.current;
+            if (!drag || event.pointerType !== 'mouse') return;
+            const moved = drag.moved || Math.hypot(event.clientX - drag.sx, event.clientY - drag.sy) > 6;
+            setFloat({ ...drag, x: event.clientX, y: event.clientY, moved });
+        };
+        const onUp = (event: PointerEvent) => {
+            const drag = floatDragRef.current;
+            if (!drag || event.pointerType !== 'mouse') return;
+            setFloat(null);
+            if (Math.hypot(event.clientX - drag.sx, event.clientY - drag.sy) <= 6) {
+                suppressClickRef.current = true;
+                handleCardTap(drag.source);
+            } else {
+                dropFloatAt(event.clientX, event.clientY, drag);
+            }
+        };
+        const onCancel = () => setFloat(null);
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onCancel);
+        window.addEventListener('blur', onCancel);
+        return () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onCancel);
+            window.removeEventListener('blur', onCancel);
+        };
+    });
+
     React.useEffect(() => {
         if (getTotalFoundationCards(board.foundations) === 52) {
             const timer = setTimeout(() => setStatus('You win!'), 0);
@@ -276,21 +427,12 @@ const Solitaire: React.FC = () => {
         }
     }, [board.foundations]);
 
-    const onDragStart = (event: React.DragEvent, source: DragSource) => {
-        event.dataTransfer.setData('text/plain', JSON.stringify(source));
-    };
-
-    const onDropTo = (event: React.DragEvent, destination: DropTarget) => {
-        event.preventDefault();
-        const raw = event.dataTransfer.getData('text/plain');
-        if (!raw) return;
-        handleDrop(JSON.parse(raw) as DragSource, destination);
-    };
-
     return (
-        <div className="sol98-shell">
+        <div className="sol98-shell" ref={shellRef}>
+            <div style={scale > 1 ? { width: DESIGN_W, zoom: scale, margin: '0 auto' } : undefined}>
             <div className="sol98-toolbar">
                 <button onClick={newGame}>New Game</button>
+                <button onClick={undo} disabled={past.length === 0}>Undo</button>
                 <span className="sol98-status">{status}</span>
             </div>
 
@@ -304,7 +446,7 @@ const Solitaire: React.FC = () => {
                         )}
                     </div>
 
-                    <div className="sol98-pile" onDragOver={event => event.preventDefault()}>
+                    <div className="sol98-pile">
                         {board.waste.length > 0 && (() => {
                             const card = board.waste[board.waste.length - 1];
                             const wasteSource: DragSource = { type: 'waste' };
@@ -312,10 +454,10 @@ const Solitaire: React.FC = () => {
                             return (
                                 <div
                                     className={`sol98-card sol98-card-${suitColor(card.suit)} ${active ? 'sol98-card-selected' : ''}`}
-                                    draggable
-                                    onDragStart={event => onDragStart(event, wasteSource)}
-                                    onClick={e => handleCardTap(wasteSource, e)}
+                                    onPointerDown={event => onCardPointerDown(event, wasteSource)}
+                                    onClick={e => guardedCardClick(e, wasteSource)}
                                     onDoubleClick={() => tryAutoFoundation(wasteSource)}
+                                    style={isDragGhosted(wasteSource) ? { opacity: 0.35 } : undefined}
                                 >
                                     <div className="sol98-corner">{rankLabel(card.rank)}{card.suit}</div>
                                     <div className="sol98-center">{card.suit}</div>
@@ -333,8 +475,7 @@ const Solitaire: React.FC = () => {
                             <div
                                 key={suit}
                                 className="sol98-pile"
-                                onDragOver={event => event.preventDefault()}
-                                onDrop={event => onDropTo(event, { type: 'foundation', suit })}
+                                data-sol-drop={`foundation:${suit}`}
                                 onClick={() => handlePileTap({ type: 'foundation', suit })}
                             >
                                 {topCard ? (
@@ -355,8 +496,7 @@ const Solitaire: React.FC = () => {
                         <div
                             key={`column-${columnIndex}`}
                             className="sol98-pile sol98-pile-tableau"
-                            onDragOver={event => event.preventDefault()}
-                            onDrop={event => onDropTo(event, { type: 'tableau', pileIndex: columnIndex })}
+                            data-sol-drop={`tableau:${columnIndex}`}
                             onClick={() => {
                                 if (column.length === 0) {
                                     handlePileTap({ type: 'tableau', pileIndex: columnIndex });
@@ -370,10 +510,9 @@ const Solitaire: React.FC = () => {
                                     <div
                                         key={`${card.suit}-${card.rank}`}
                                         className={`sol98-card ${card.faceUp ? `sol98-card-${suitColor(card.suit)}` : 'sol98-card-back'} ${active ? 'sol98-card-selected' : ''}`}
-                                        style={{ top: `${cardIndex * 20}px`, zIndex: cardIndex }}
-                                        draggable={card.faceUp}
-                                        onDragStart={event => onDragStart(event, cardSource)}
-                                        onClick={e => card.faceUp && handleCardTap(cardSource, e)}
+                                        style={{ top: `${cardIndex * 20}px`, zIndex: cardIndex, ...(isDragGhosted(cardSource) ? { opacity: 0.35 } : {}) }}
+                                        onPointerDown={event => onCardPointerDown(event, cardSource)}
+                                        onClick={e => card.faceUp && guardedCardClick(e, cardSource)}
                                         onDoubleClick={() => card.faceUp && tryAutoFoundation(cardSource)}
                                     >
                                         {card.faceUp && (
@@ -389,6 +528,21 @@ const Solitaire: React.FC = () => {
                     ))}
                 </div>
             </div>
+            </div>
+            {floatDrag?.moved && (
+                <div style={{ position: 'fixed', left: floatDrag.x - floatDrag.offsetX, top: floatDrag.y - floatDrag.offsetY, zIndex: 9999, pointerEvents: 'none' }}>
+                    {floatDrag.cards.map((card, index) => (
+                        <div
+                            key={`${card.suit}-${card.rank}`}
+                            className={`sol98-card sol98-card-${suitColor(card.suit)}`}
+                            style={{ left: 0, top: index * 20, zIndex: index }}
+                        >
+                            <div className="sol98-corner">{rankLabel(card.rank)}{card.suit}</div>
+                            <div className="sol98-center">{card.suit}</div>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 };

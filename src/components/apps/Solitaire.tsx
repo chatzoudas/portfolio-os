@@ -92,6 +92,72 @@ function getTotalFoundationCards(foundations: Record<Suit, Card[]>): number {
     return SUITS.reduce((total, suit) => total + foundations[suit].length, 0);
 }
 
+function areAllCardsUncovered(state: BoardState): boolean {
+    if (state.stock.length !== 0) return false;
+    return state.tableau.every(column => column.every(card => card.faceUp));
+}
+
+function findAutoFoundationMove(state: BoardState): DragSource | null {
+    const candidates: { source: DragSource; card: Card }[] = [];
+
+    if (state.waste.length > 0) {
+        const card = state.waste[state.waste.length - 1];
+        const pile = state.foundations[card.suit];
+        const topRank = pile.length ? pile[pile.length - 1].rank : 0;
+        if (card.rank === topRank + 1) {
+            candidates.push({ source: { type: 'waste' }, card });
+        }
+    }
+
+    state.tableau.forEach((column, pileIndex) => {
+        if (column.length === 0) return;
+        const card = column[column.length - 1];
+        if (!card.faceUp) return;
+        const pile = state.foundations[card.suit];
+        const topRank = pile.length ? pile[pile.length - 1].rank : 0;
+        if (card.rank === topRank + 1) {
+            candidates.push({ source: { type: 'tableau', pileIndex, cardIndex: column.length - 1 }, card });
+        }
+    });
+
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => a.card.rank - b.card.rank);
+    return candidates[0].source;
+}
+
+function moveSourceToFoundation(previous: BoardState, source: DragSource): BoardState {
+    let card: Card | undefined;
+
+    if (source.type === 'waste') {
+        card = previous.waste[previous.waste.length - 1];
+    } else if (source.type === 'tableau' && source.pileIndex !== undefined && source.cardIndex !== undefined) {
+        const column = previous.tableau[source.pileIndex];
+        if (source.cardIndex !== column.length - 1) return previous;
+        card = column[column.length - 1];
+    }
+
+    if (!card) return previous;
+
+    const foundationPile = previous.foundations[card.suit];
+    const topRank = foundationPile.length ? foundationPile[foundationPile.length - 1].rank : 0;
+    if (card.rank !== topRank + 1) return previous;
+
+    const foundations = { ...previous.foundations, [card.suit]: [...foundationPile, card] };
+
+    if (source.type === 'waste') {
+        return { ...previous, waste: previous.waste.slice(0, -1), foundations };
+    }
+
+    const pileIndex = source.pileIndex as number;
+    const column = previous.tableau[pileIndex].slice(0, -1);
+    if (column.length && !column[column.length - 1].faceUp) {
+        column[column.length - 1] = withFaceUp(column[column.length - 1], true);
+    }
+    const tableau = previous.tableau.map((existing, index) => (index === pileIndex ? column : existing));
+
+    return { ...previous, tableau, foundations };
+}
+
 const DESIGN_W = 518;
 const DESIGN_H = 530;
 const MAX_SCALE = 4;
@@ -102,6 +168,8 @@ const Solitaire: React.FC = () => {
     const [selectedSource, setSelectedSource] = React.useState<DragSource | null>(null);
     const [past, setPast] = React.useState<BoardState[]>([]);
     const [scale, setScale] = React.useState(1);
+    const [autoSorting, setAutoSorting] = React.useState(false);
+    const [autoSuppressed, setAutoSuppressed] = React.useState(false);
     const boardRef = React.useRef(board);
     const shellRef = React.useRef<HTMLDivElement>(null);
     const [floatDrag, setFloatDrag] = React.useState<DragFloat | null>(null);
@@ -126,13 +194,24 @@ const Solitaire: React.FC = () => {
         return () => observer.disconnect();
     }, []);
 
-    const applyBoard = (updater: (previous: BoardState) => BoardState) => {
+    const applyBoard = (updater: (previous: BoardState) => BoardState, recordHistory = true) => {
         const snapshot = boardRef.current;
         const next = updater(snapshot);
         if (next === snapshot) return;
         boardRef.current = next;
         setBoard(next);
-        setPast(previous => [...previous.slice(-99), snapshot]);
+        if (recordHistory) {
+            setPast(previous => [...previous.slice(-99), snapshot]);
+        }
+    };
+
+    const applyAutoStep = (updater: (previous: BoardState) => BoardState) => {
+        const snapshot = boardRef.current;
+        const next = updater(snapshot);
+        if (next === snapshot) return false;
+        boardRef.current = next;
+        setBoard(next);
+        return true;
     };
 
     const newGame = () => {
@@ -142,19 +221,37 @@ const Solitaire: React.FC = () => {
         setPast([]);
         setStatus('');
         setSelectedSource(null);
+        setAutoSorting(false);
+        setAutoSuppressed(false);
     };
 
     const undo = () => {
-        if (past.length === 0) return;
+        if (past.length === 0 || autoSorting) return;
         const previous = past[past.length - 1];
         boardRef.current = previous;
         setBoard(previous);
         setPast(past.slice(0, -1));
         setSelectedSource(null);
+        setAutoSorting(false);
+        setAutoSuppressed(true);
         setStatus(getTotalFoundationCards(previous.foundations) === 52 ? 'You win!' : '');
     };
 
+    const stopAutoSorting = () => {
+        setAutoSorting(false);
+        setAutoSuppressed(true);
+        setStatus('');
+    };
+
+    const startAutoSorting = () => {
+        setSelectedSource(null);
+        setAutoSuppressed(false);
+        setAutoSorting(true);
+        setStatus('Auto-sorting...');
+    };
+
     const drawStock = () => {
+        if (autoSorting) return;
         setSelectedSource(null);
         applyBoard(previous => {
             if (previous.stock.length === 0) {
@@ -179,6 +276,7 @@ const Solitaire: React.FC = () => {
     };
 
     const handleCardTap = (source: DragSource, event?: React.MouseEvent) => {
+        if (autoSorting) return;
         if (event) event.stopPropagation();
         if (!selectedSource) {
             setSelectedSource(source);
@@ -206,6 +304,7 @@ const Solitaire: React.FC = () => {
     };
 
     const tryAutoFoundation = (source: DragSource) => {
+        if (autoSorting) return;
         setSelectedSource(null);
         applyBoard(previous => {
             let card: Card | undefined;
@@ -242,6 +341,7 @@ const Solitaire: React.FC = () => {
     };
 
     const handleDrop = (source: DragSource, destination: DropTarget) => {
+        if (autoSorting) return;
         applyBoard(previous => {
             let movingCards: Card[];
             let waste = previous.waste;
@@ -355,6 +455,7 @@ const Solitaire: React.FC = () => {
     };
 
     const onCardPointerDown = (event: React.PointerEvent, source: DragSource) => {
+        if (autoSorting) return;
         if (event.pointerType !== 'mouse' || event.button !== 0) return;
         const moving = getMovingCards(boardRef.current, source);
         if (!moving) return;
@@ -422,17 +523,50 @@ const Solitaire: React.FC = () => {
 
     React.useEffect(() => {
         if (getTotalFoundationCards(board.foundations) === 52) {
+            setAutoSorting(false);
             const timer = setTimeout(() => setStatus('You win!'), 0);
             return () => clearTimeout(timer);
         }
     }, [board.foundations]);
+
+    const canAutoComplete =
+        getTotalFoundationCards(board.foundations) < 52 && areAllCardsUncovered(board);
+
+    React.useEffect(() => {
+        if (canAutoComplete && !autoSorting && !autoSuppressed) {
+            setPast(previous => [...previous.slice(-99), boardRef.current]);
+            setAutoSorting(true);
+            setSelectedSource(null);
+            setStatus('Auto-sorting...');
+        }
+    }, [canAutoComplete, autoSorting, autoSuppressed]);
+
+    React.useEffect(() => {
+        if (!autoSorting) return;
+        if (getTotalFoundationCards(boardRef.current.foundations) === 52) return;
+        const timer = setTimeout(() => {
+            const source = findAutoFoundationMove(boardRef.current);
+            if (!source) {
+                setAutoSorting(false);
+                setStatus('');
+                return;
+            }
+            applyAutoStep(previous => moveSourceToFoundation(previous, source));
+        }, 120);
+        return () => clearTimeout(timer);
+    }, [autoSorting, board]);
 
     return (
         <div className="sol98-shell" ref={shellRef}>
             <div style={scale > 1 ? { width: DESIGN_W, zoom: scale, margin: '0 auto' } : undefined}>
             <div className="sol98-toolbar">
                 <button onClick={newGame}>New Game</button>
-                <button onClick={undo} disabled={past.length === 0}>Undo</button>
+                <button onClick={undo} disabled={past.length === 0 || autoSorting}>Undo</button>
+                {autoSorting ? (
+                    <button onClick={stopAutoSorting}>Stop Auto</button>
+                ) : (
+                    canAutoComplete && <button onClick={startAutoSorting}>Auto Finish</button>
+                )}
                 <span className="sol98-status">{status}</span>
             </div>
 

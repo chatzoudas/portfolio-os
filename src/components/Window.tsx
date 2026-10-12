@@ -20,8 +20,6 @@ const Window: React.FC<WindowProps> = ({
     title,
     icon,
     isActive,
-    x: initialX,
-    y: initialY,
     width,
     height,
     focusSignal,
@@ -63,11 +61,13 @@ const Window: React.FC<WindowProps> = ({
 
     // Mirrors for effects that must subscribe once instead of on every move.
     const sizeRef = useRef(size);
-    sizeRef.current = size;
     const positionRef = useRef(position);
-    positionRef.current = position;
     const maximizedRef = useRef(isMaximized);
-    maximizedRef.current = isMaximized;
+    useEffect(() => {
+        sizeRef.current = size;
+        positionRef.current = position;
+        maximizedRef.current = isMaximized;
+    }, [size, position, isMaximized]);
 
     const hasUserResizedRef = useRef(false);
     const hasUserMovedRef = useRef(false);

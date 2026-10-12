@@ -183,7 +183,30 @@ const Pacman: React.FC<{ paused?: boolean }> = ({ paused = false }) => {
     const ctxRef = React.useRef<CanvasRenderingContext2D | null>(null);
     const staticLayerRef = React.useRef<HTMLCanvasElement | null>(null);
     const pausedRef = React.useRef(paused);
-    pausedRef.current = paused;
+    React.useEffect(() => {
+        pausedRef.current = paused;
+    }, [paused]);
+    // Self-pause when the canvas isn't actually visible (window minimized
+    // sets display:none, which IntersectionObserver reports as hidden).
+    // This catches minimize even though Desktop only tracks focus.
+    const [canvasVisible, setCanvasVisible] = React.useState(true);
+    const canvasVisibleRef = React.useRef(true);
+    React.useEffect(() => {
+        canvasVisibleRef.current = canvasVisible;
+    }, [canvasVisible]);
+    React.useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas || typeof IntersectionObserver === 'undefined') return;
+        const observer = new IntersectionObserver(
+            entries => {
+                const entry = entries[0];
+                if (entry) setCanvasVisible(entry.isIntersecting);
+            },
+            { threshold: 0 }
+        );
+        observer.observe(canvas);
+        return () => observer.disconnect();
+    }, []);
     const wrapRef = React.useRef<HTMLDivElement>(null);
     const gridRef = React.useRef<string[][]>(buildGrid());
     const pacRef = React.useRef<Position>({ row: 17, col: 9 });
@@ -619,7 +642,7 @@ const Pacman: React.FC<{ paused?: boolean }> = ({ paused = false }) => {
         const TICK = 160;
         function loop(time: number) {
             // Don't burn CPU when the window is minimized/unfocused or tab hidden.
-            if (pausedRef.current || document.hidden) {
+            if (pausedRef.current || !canvasVisibleRef.current || document.hidden) {
                 lastTime = time;
                 animRef.current = requestAnimationFrame(loop);
                 return;

@@ -503,7 +503,9 @@ const Solitaire: React.FC = () => {
     // Mirrors of state for the stable callbacks below (which keep a constant
     // identity so memoized cards don't re-render when handlers don't change).
     const autoSortingRef = React.useRef(autoSorting);
-    autoSortingRef.current = autoSorting;
+    React.useEffect(() => {
+        autoSortingRef.current = autoSorting;
+    }, [autoSorting]);
 
     const stablePointerDown = React.useCallback((source: DragSource, event: React.PointerEvent) => {
         if (autoSortingRef.current) return;
@@ -539,11 +541,13 @@ const Solitaire: React.FC = () => {
     // once ([]) yet always call the current logic (avoids re-subscribing on
     // every board change, which was the previous behavior with no dep array).
     const handleCardTapRef = React.useRef(handleCardTap);
-    handleCardTapRef.current = handleCardTap;
     const dropFloatAtRef = React.useRef(dropFloatAt);
-    dropFloatAtRef.current = dropFloatAt;
     const tryAutoFoundationRef = React.useRef(tryAutoFoundation);
-    tryAutoFoundationRef.current = tryAutoFoundation;
+    React.useEffect(() => {
+        handleCardTapRef.current = handleCardTap;
+        dropFloatAtRef.current = dropFloatAt;
+        tryAutoFoundationRef.current = tryAutoFoundation;
+    });
 
     const stableClick = React.useCallback((source: DragSource, event: React.MouseEvent) => {
         if (suppressClickRef.current) {

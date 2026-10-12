@@ -13,8 +13,6 @@ export interface AppConfig {
     id: string;
     title: string;
     icon: string;
-    // No component: launching the app performs an action (spawns a
-    // desktop sheep) instead of opening a window.
     component?: 'AboutMe' | 'Pacman' | 'PopupMessage' | 'Solitaire';
     width?: number;
     height?: number;

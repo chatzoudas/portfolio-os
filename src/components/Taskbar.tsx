@@ -1,6 +1,32 @@
 import React, { useState, useEffect, useRef } from 'react';
-import '98.css/dist/98.css';
 import type { AppConfig } from './Desktop';
+
+function formatMinutes(date: Date): string {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// Isolated so the 1s→minute clock doesn't re-render the whole taskbar.
+// Ticks every 5s but only sets state when the displayed minute changes.
+const Clock = React.memo(function Clock() {
+    const [now, setNow] = useState(() => new Date());
+
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setNow(prev => {
+                const next = new Date();
+                return formatMinutes(prev) === formatMinutes(next) ? prev : next;
+            });
+        }, 5000);
+
+        return () => clearInterval(timer);
+    }, []);
+
+    return (
+        <div className="time">
+            {formatMinutes(now)}
+        </div>
+    );
+});
 
 interface TaskbarProps {
     activeWindows: {
@@ -14,7 +40,6 @@ interface TaskbarProps {
 }
 
 const Taskbar: React.FC<TaskbarProps> = ({ activeWindows, onWindowClick, apps, onStartApp }) => {
-    const [time, setTime] = useState(new Date());
     const [isStartOpen, setIsStartOpen] = useState(false);
     const startMenuRef = useRef<HTMLDivElement>(null);
     const startButtonRef = useRef<HTMLButtonElement>(null);
@@ -37,14 +62,6 @@ const Taskbar: React.FC<TaskbarProps> = ({ activeWindows, onWindowClick, apps, o
             document.removeEventListener('mousedown', handleClickOutside);
         };
     }, [isStartOpen]);
-
-    useEffect(() => {
-        const timer = setInterval(() => {
-            setTime(new Date());
-        }, 1000);
-
-        return () => clearInterval(timer);
-    }, []);
 
     return (
         <div className="taskbar" style={{ zIndex: 10000 }}>
@@ -154,9 +171,7 @@ const Taskbar: React.FC<TaskbarProps> = ({ activeWindows, onWindowClick, apps, o
                 ))}
             </div>
             <div className="system-tray">
-                <div className="time">
-                    {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </div>
+                <Clock />
             </div>
         </div>
     );

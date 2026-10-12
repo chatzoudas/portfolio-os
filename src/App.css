@@ -1,6 +1,7 @@
 @font-face {
   font-family: "MS Sans Serif";
   src: url("/fonts/MS Sans Serif.ttf") format("truetype");
+  font-display: swap;
   font-smooth: never;
   -webkit-font-smoothing: none;
 }

@@ -36,8 +36,6 @@ const Window: React.FC<WindowProps> = ({
     const MIN_WIDTH = 240;
     const MIN_HEIGHT = 160;
 
-    const isMobileViewport = typeof window !== 'undefined' && window.innerWidth <= 768;
-
     const [isDragging, setIsDragging] = useState(false);
     const [isMaximized, setIsMaximized] = useState(false);
     const [isMinimized, setIsMinimized] = useState(false);
@@ -62,6 +60,14 @@ const Window: React.FC<WindowProps> = ({
     });
 
     const [prevSize, setPrevSize] = useState({ width: size.width, height: size.height, x: position.x, y: position.y });
+
+    // Mirrors for effects that must subscribe once instead of on every move.
+    const sizeRef = useRef(size);
+    sizeRef.current = size;
+    const positionRef = useRef(position);
+    positionRef.current = position;
+    const maximizedRef = useRef(isMaximized);
+    maximizedRef.current = isMaximized;
 
     const hasUserResizedRef = useRef(false);
     const hasUserMovedRef = useRef(false);
@@ -91,14 +97,14 @@ const Window: React.FC<WindowProps> = ({
 
     useEffect(() => {
         const handleBrowserResize = () => {
-            if (isMaximized) return;
+            if (maximizedRef.current) return;
 
             const naturalSize = {
                 width: window_width,
                 height: window_height
             };
 
-            const targetSize = hasUserResizedRef.current ? size : naturalSize;
+            const targetSize = hasUserResizedRef.current ? sizeRef.current : naturalSize;
 
             const shouldRecenter = centered && !hasUserResizedRef.current && !hasUserMovedRef.current;
             const targetPosition = shouldRecenter
@@ -106,7 +112,7 @@ const Window: React.FC<WindowProps> = ({
                     x: Math.max(0, (window.innerWidth - targetSize.width) / 2),
                     y: Math.max(0, (window.innerHeight - TASKBAR_HEIGHT - targetSize.height) / 2)
                 }
-                : position;
+                : positionRef.current;
 
             const clamped = clampWindowToViewport({
                 x: targetPosition.x,
@@ -121,10 +127,14 @@ const Window: React.FC<WindowProps> = ({
 
         window.addEventListener('resize', handleBrowserResize);
         return () => window.removeEventListener('resize', handleBrowserResize);
-    }, [isMaximized, size, position, centered, clampWindowToViewport, window_height, window_width]);
+    }, [centered, clampWindowToViewport, window_height, window_width]);
 
     const windowRef = useRef<HTMLDivElement>(null);
     const dragStartRef = useRef({ x: 0, y: 0 });
+    const dragRafRef = useRef(0);
+    const pendingPosRef = useRef<{ x: number; y: number } | null>(null);
+    const resizeRafRef = useRef(0);
+    const pendingRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
 
     type ResizeDirection =
         | 'top'
@@ -161,23 +171,38 @@ const Window: React.FC<WindowProps> = ({
     };
 
     const handleDrag = useCallback((e: MouseEvent | TouchEvent) => {
-        if (isDragging) {
-            if (e.type === 'touchmove' && e.cancelable) {
-                e.preventDefault();
-            }
-            const clientX = 'touches' in e ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
-            const clientY = 'touches' in e ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
-
-            setPosition({
-                x: clientX - dragStartRef.current.x,
-                y: clientY - dragStartRef.current.y
-            });
+        if (e.type === 'touchmove' && e.cancelable) {
+            e.preventDefault();
         }
-    }, [isDragging]);
+        const clientX = 'touches' in e ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
+        const clientY = 'touches' in e ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
 
-    const handleDragEnd = () => {
+        pendingPosRef.current = {
+            x: clientX - dragStartRef.current.x,
+            y: clientY - dragStartRef.current.y
+        };
+        // Coalesce mousemove floods to one state update per frame.
+        if (dragRafRef.current) return;
+        dragRafRef.current = requestAnimationFrame(() => {
+            dragRafRef.current = 0;
+            if (pendingPosRef.current) {
+                setPosition(pendingPosRef.current);
+            }
+        });
+    }, []);
+
+    const handleDragEnd = useCallback(() => {
+        // Flush the last pending position so the window doesn't lag one frame.
+        if (dragRafRef.current) {
+            cancelAnimationFrame(dragRafRef.current);
+            dragRafRef.current = 0;
+        }
+        if (pendingPosRef.current) {
+            setPosition(pendingPosRef.current);
+            pendingPosRef.current = null;
+        }
         setIsDragging(false);
-    };
+    }, []);
 
     useEffect(() => {
         if (isDragging) {
@@ -191,8 +216,12 @@ const Window: React.FC<WindowProps> = ({
             window.removeEventListener('mouseup', handleDragEnd);
             window.removeEventListener('touchmove', handleDrag);
             window.removeEventListener('touchend', handleDragEnd);
+            if (dragRafRef.current) {
+                cancelAnimationFrame(dragRafRef.current);
+                dragRafRef.current = 0;
+            }
         };
-    }, [isDragging, handleDrag]);
+    }, [isDragging, handleDrag, handleDragEnd]);
 
     const handleResizeStart = (dir: ResizeDirection, e: React.MouseEvent | React.TouchEvent) => {
         if (isMaximized) return;
@@ -217,9 +246,7 @@ const Window: React.FC<WindowProps> = ({
         };
     };
 
-    const handleResize = (e: MouseEvent | TouchEvent) => {
-        if (!isResizing) return;
-
+    const handleResize = useCallback((e: MouseEvent | TouchEvent) => {
         const start = resizeStartRef.current;
         const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
         const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
@@ -287,14 +314,34 @@ const Window: React.FC<WindowProps> = ({
             nextHeight = maxBottom - nextY;
         }
 
+        // clampWindowToViewport is stable; compute immediately (cheap) but
+        // apply state at most once per frame.
         const clamped = clampWindowToViewport({ x: nextX, y: nextY, width: nextWidth, height: nextHeight });
-        setPosition({ x: clamped.x, y: clamped.y });
-        setSize({ width: clamped.width, height: clamped.height });
-    };
+        pendingRectRef.current = clamped;
+        if (resizeRafRef.current) return;
+        resizeRafRef.current = requestAnimationFrame(() => {
+            resizeRafRef.current = 0;
+            const pending = pendingRectRef.current;
+            if (pending) {
+                setPosition({ x: pending.x, y: pending.y });
+                setSize({ width: pending.width, height: pending.height });
+            }
+        });
+    }, [clampWindowToViewport]);
 
-    const handleResizeEnd = () => {
+    const handleResizeEnd = useCallback(() => {
+        if (resizeRafRef.current) {
+            cancelAnimationFrame(resizeRafRef.current);
+            resizeRafRef.current = 0;
+        }
+        const pending = pendingRectRef.current;
+        if (pending) {
+            setPosition({ x: pending.x, y: pending.y });
+            setSize({ width: pending.width, height: pending.height });
+            pendingRectRef.current = null;
+        }
         setIsResizing(false);
-    };
+    }, []);
 
     const handleMaximize = (e?: React.MouseEvent | React.TouchEvent) => {
         if (e) e.stopPropagation();
@@ -340,8 +387,12 @@ const Window: React.FC<WindowProps> = ({
             window.removeEventListener('mouseup', handleResizeEnd);
             window.removeEventListener('touchmove', onResizeTouch);
             window.removeEventListener('touchend', handleResizeEnd);
+            if (resizeRafRef.current) {
+                cancelAnimationFrame(resizeRafRef.current);
+                resizeRafRef.current = 0;
+            }
         };
-    }, [isResizing, handleResize]);
+    }, [isResizing, handleResize, handleResizeEnd]);
 
     return (
         <div

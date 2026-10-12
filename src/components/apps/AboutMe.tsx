@@ -1,11 +1,10 @@
 import React from 'react';
-import '98.css/dist/98.css';
 
 const AboutMe: React.FC = () => {
     return (
         <div className="about-me">
             <div className="field-row">
-                <img src="/faces/hero.webp" alt="Profile Picture" className='face-tracker' />
+                <img src="/faces/hero.webp" alt="Profile Picture" className='face-tracker' width={150} height={150} decoding="async" />
                 <div>
                     <h4 style={{ marginBottom: '10px' }}>Nick Chatzoudas</h4>
                     <p style={{ fontWeight: "bold" }}>Digital Systems Student</p>

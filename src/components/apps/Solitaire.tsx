@@ -162,6 +162,63 @@ const DESIGN_W = 518;
 const DESIGN_H = 530;
 const MAX_SCALE = 4;
 
+interface SolCardProps {
+    card: Card;
+    source: DragSource;
+    active?: boolean;
+    ghosted?: boolean;
+    top?: number;
+    onPointerDown: (source: DragSource, event: React.PointerEvent) => void;
+    onClick: (source: DragSource, event: React.MouseEvent) => void;
+    onDoubleClick: (source: DragSource) => void;
+}
+
+function solCardEqual(prev: SolCardProps, next: SolCardProps): boolean {
+    return (
+        prev.card.suit === next.card.suit &&
+        prev.card.rank === next.card.rank &&
+        prev.card.faceUp === next.card.faceUp &&
+        prev.active === next.active &&
+        prev.ghosted === next.ghosted &&
+        prev.top === next.top &&
+        prev.source.type === next.source.type &&
+        prev.source.pileIndex === next.source.pileIndex &&
+        prev.source.cardIndex === next.source.cardIndex
+    );
+}
+
+// Memoized so a move re-renders only the cards that changed, not all 52.
+// Callbacks are stable (dispatch through latest-handler refs), so comparing
+// data fields is sufficient and stale closures are impossible.
+const SolCard = React.memo(function SolCard(props: SolCardProps) {
+    const { card, source, active, ghosted, top, onPointerDown, onClick, onDoubleClick } = props;
+    return (
+        <div
+            className={`sol98-card sol98-card-${suitColor(card.suit)} ${active ? 'sol98-card-selected' : ''}`}
+            style={top !== undefined ? { top: `${top}px`, zIndex: top / 20, ...(ghosted ? { opacity: 0.35 } : {}) } : ghosted ? { opacity: 0.35 } : undefined}
+            onPointerDown={event => onPointerDown(source, event)}
+            onClick={event => onClick(source, event)}
+            onDoubleClick={() => onDoubleClick(source)}
+        >
+            <div className="sol98-corner">{rankLabel(card.rank)}{card.suit}</div>
+            <div className="sol98-center">{card.suit}</div>
+        </div>
+    );
+}, solCardEqual);
+
+const WASTE_SOURCE: DragSource = { type: 'waste' };
+
+function getMovingCards(state: BoardState, source: DragSource): Card[] | null {
+    if (source.type === 'waste') {
+        if (!state.waste.length) return null;
+        return [state.waste[state.waste.length - 1]];
+    }
+    const column = state.tableau[source.pileIndex as number];
+    const moving = column.slice(source.cardIndex as number);
+    if (!moving.length || !moving[0].faceUp) return null;
+    return moving;
+}
+
 const Solitaire: React.FC = () => {
     const [board, setBoard] = React.useState<BoardState>(() => deal());
     const [status, setStatus] = React.useState('');
@@ -432,17 +489,6 @@ const Solitaire: React.FC = () => {
         });
     };
 
-    const getMovingCards = (state: BoardState, source: DragSource): Card[] | null => {
-        if (source.type === 'waste') {
-            if (!state.waste.length) return null;
-            return [state.waste[state.waste.length - 1]];
-        }
-        const column = state.tableau[source.pileIndex as number];
-        const moving = column.slice(source.cardIndex as number);
-        if (!moving.length || !moving[0].faceUp) return null;
-        return moving;
-    };
-
     const dropFloatAt = (clientX: number, clientY: number, drag: DragFloat) => {
         const target = document.elementFromPoint(clientX, clientY)?.closest('[data-sol-drop]');
         const kind = target?.getAttribute('data-sol-drop');
@@ -454,13 +500,18 @@ const Solitaire: React.FC = () => {
         }
     };
 
-    const onCardPointerDown = (event: React.PointerEvent, source: DragSource) => {
-        if (autoSorting) return;
+    // Mirrors of state for the stable callbacks below (which keep a constant
+    // identity so memoized cards don't re-render when handlers don't change).
+    const autoSortingRef = React.useRef(autoSorting);
+    autoSortingRef.current = autoSorting;
+
+    const stablePointerDown = React.useCallback((source: DragSource, event: React.PointerEvent) => {
+        if (autoSortingRef.current) return;
         if (event.pointerType !== 'mouse' || event.button !== 0) return;
         const moving = getMovingCards(boardRef.current, source);
         if (!moving) return;
         const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-        setFloat({
+        const drag: DragFloat = {
             source,
             cards: moving,
             x: event.clientX,
@@ -470,9 +521,11 @@ const Solitaire: React.FC = () => {
             offsetX: event.clientX - rect.left,
             offsetY: event.clientY - rect.top,
             moved: false,
-        });
+        };
+        floatDragRef.current = drag;
+        setFloatDrag(drag);
         setSelectedSource(null);
-    };
+    }, []);
 
     const isDragGhosted = (source: DragSource) => {
         const drag = floatDrag;
@@ -482,19 +535,35 @@ const Solitaire: React.FC = () => {
         return drag.source.pileIndex === source.pileIndex && (source.cardIndex as number) >= (drag.source.cardIndex as number);
     };
 
-    const guardedCardClick = (event: React.MouseEvent, source: DragSource) => {
+    // Latest-handler refs so the global pointer listeners below can subscribe
+    // once ([]) yet always call the current logic (avoids re-subscribing on
+    // every board change, which was the previous behavior with no dep array).
+    const handleCardTapRef = React.useRef(handleCardTap);
+    handleCardTapRef.current = handleCardTap;
+    const dropFloatAtRef = React.useRef(dropFloatAt);
+    dropFloatAtRef.current = dropFloatAt;
+    const tryAutoFoundationRef = React.useRef(tryAutoFoundation);
+    tryAutoFoundationRef.current = tryAutoFoundation;
+
+    const stableClick = React.useCallback((source: DragSource, event: React.MouseEvent) => {
         if (suppressClickRef.current) {
             suppressClickRef.current = false;
             return;
         }
-        handleCardTap(source, event);
-    };
+        handleCardTapRef.current(source, event);
+    }, []);
+
+    const stableDoubleClick = React.useCallback((source: DragSource) => {
+        tryAutoFoundationRef.current(source);
+    }, []);
 
     React.useEffect(() => {
         const onMove = (event: PointerEvent) => {
             const drag = floatDragRef.current;
             if (!drag || event.pointerType !== 'mouse') return;
             const moved = drag.moved || Math.hypot(event.clientX - drag.sx, event.clientY - drag.sy) > 6;
+            // Skip state update when nothing changed to avoid extra renders.
+            if (drag.moved === moved && drag.x === event.clientX && drag.y === event.clientY) return;
             setFloat({ ...drag, x: event.clientX, y: event.clientY, moved });
         };
         const onUp = (event: PointerEvent) => {
@@ -503,9 +572,9 @@ const Solitaire: React.FC = () => {
             setFloat(null);
             if (Math.hypot(event.clientX - drag.sx, event.clientY - drag.sy) <= 6) {
                 suppressClickRef.current = true;
-                handleCardTap(drag.source);
+                handleCardTapRef.current(drag.source);
             } else {
-                dropFloatAt(event.clientX, event.clientY, drag);
+                dropFloatAtRef.current(event.clientX, event.clientY, drag);
             }
         };
         const onCancel = () => setFloat(null);
@@ -519,7 +588,7 @@ const Solitaire: React.FC = () => {
             window.removeEventListener('pointercancel', onCancel);
             window.removeEventListener('blur', onCancel);
         };
-    });
+    }, []);
 
     React.useEffect(() => {
         if (getTotalFoundationCards(board.foundations) === 52) {
@@ -583,19 +652,17 @@ const Solitaire: React.FC = () => {
                     <div className="sol98-pile">
                         {board.waste.length > 0 && (() => {
                             const card = board.waste[board.waste.length - 1];
-                            const wasteSource: DragSource = { type: 'waste' };
-                            const active = isSelected(wasteSource);
+                            const active = isSelected(WASTE_SOURCE);
                             return (
-                                <div
-                                    className={`sol98-card sol98-card-${suitColor(card.suit)} ${active ? 'sol98-card-selected' : ''}`}
-                                    onPointerDown={event => onCardPointerDown(event, wasteSource)}
-                                    onClick={e => guardedCardClick(e, wasteSource)}
-                                    onDoubleClick={() => tryAutoFoundation(wasteSource)}
-                                    style={isDragGhosted(wasteSource) ? { opacity: 0.35 } : undefined}
-                                >
-                                    <div className="sol98-corner">{rankLabel(card.rank)}{card.suit}</div>
-                                    <div className="sol98-center">{card.suit}</div>
-                                </div>
+                                <SolCard
+                                    card={card}
+                                    source={WASTE_SOURCE}
+                                    active={active}
+                                    ghosted={isDragGhosted(WASTE_SOURCE)}
+                                    onPointerDown={stablePointerDown}
+                                    onClick={stableClick}
+                                    onDoubleClick={stableDoubleClick}
+                                />
                             );
                         })()}
                     </div>
@@ -638,24 +705,29 @@ const Solitaire: React.FC = () => {
                             }}
                         >
                             {column.map((card, cardIndex) => {
+                                if (!card.faceUp) {
+                                    return (
+                                        <div
+                                            key={`${card.suit}-${card.rank}`}
+                                            className="sol98-card sol98-card-back"
+                                            style={{ top: `${cardIndex * 20}px`, zIndex: cardIndex }}
+                                        />
+                                    );
+                                }
                                 const cardSource: DragSource = { type: 'tableau', pileIndex: columnIndex, cardIndex };
-                                const active = card.faceUp && isSelected(cardSource);
+                                const active = isSelected(cardSource);
                                 return (
-                                    <div
+                                    <SolCard
                                         key={`${card.suit}-${card.rank}`}
-                                        className={`sol98-card ${card.faceUp ? `sol98-card-${suitColor(card.suit)}` : 'sol98-card-back'} ${active ? 'sol98-card-selected' : ''}`}
-                                        style={{ top: `${cardIndex * 20}px`, zIndex: cardIndex, ...(isDragGhosted(cardSource) ? { opacity: 0.35 } : {}) }}
-                                        onPointerDown={event => onCardPointerDown(event, cardSource)}
-                                        onClick={e => card.faceUp && guardedCardClick(e, cardSource)}
-                                        onDoubleClick={() => card.faceUp && tryAutoFoundation(cardSource)}
-                                    >
-                                        {card.faceUp && (
-                                            <>
-                                                <div className="sol98-corner">{rankLabel(card.rank)}{card.suit}</div>
-                                                <div className="sol98-center">{card.suit}</div>
-                                            </>
-                                        )}
-                                    </div>
+                                        card={card}
+                                        source={cardSource}
+                                        active={active}
+                                        ghosted={isDragGhosted(cardSource)}
+                                        top={cardIndex * 20}
+                                        onPointerDown={stablePointerDown}
+                                        onClick={stableClick}
+                                        onDoubleClick={stableDoubleClick}
+                                    />
                                 );
                             })}
                         </div>

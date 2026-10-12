@@ -72,6 +72,22 @@ function elevateNode(el: HTMLElement): void {
 }
 
 let elevatorInstalled = false;
+let elevatorObserver: MutationObserver | null = null;
+let elevatorStopTimer: ReturnType<typeof setTimeout> | null = null;
+
+function elevateTree(node: Node | null): void {
+    let el = node instanceof HTMLElement ? node : node?.parentElement ?? null;
+    while (el && el !== document.body) {
+        if (el instanceof HTMLElement) {
+            elevateNode(el);
+        }
+        el = el.parentElement;
+    }
+}
+
+function sweepSheepNodes(): void {
+    Array.from(document.body.children).forEach(elevateTree);
+}
 
 function installSheepElevator(): void {
     if (elevatorInstalled) {
@@ -79,26 +95,22 @@ function installSheepElevator(): void {
     }
     elevatorInstalled = true;
 
-    const elevateTree = (node: Node | null) => {
-        let el = node instanceof HTMLElement ? node : node?.parentElement ?? null;
-        while (el && el !== document.body) {
-            if (el instanceof HTMLElement) {
-                elevateNode(el);
-            }
-            el = el.parentElement;
-        }
-    };
-
-    Array.from(document.body.children).forEach(elevateTree);
-    new MutationObserver(mutations => {
+    sweepSheepNodes();
+    // Sheep DOM nodes are appended once on spawn; watching style-attribute
+    // churn (every animation frame) was pure overhead, so observe child
+    // additions only and stop entirely after things settle.
+    elevatorObserver = new MutationObserver(mutations => {
         for (const mutation of mutations) {
-            if (mutation.type === 'attributes') {
-                elevateTree(mutation.target);
-            } else {
-                mutation.addedNodes.forEach(elevateTree);
-            }
+            mutation.addedNodes.forEach(elevateTree);
         }
-    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+    });
+    elevatorObserver.observe(document.body, { childList: true, subtree: true });
+
+    if (elevatorStopTimer) clearTimeout(elevatorStopTimer);
+    elevatorStopTimer = setTimeout(() => {
+        elevatorObserver?.disconnect();
+        elevatorObserver = null;
+    }, 30000);
 }
 
 export async function spawnESheep(petFile: string = DEFAULT_PET): Promise<void> {
@@ -110,4 +122,23 @@ export async function spawnESheep(petFile: string = DEFAULT_PET): Promise<void> 
     }
     const sheep = new SheepClass({ allowPets: 'none', allowPopup: 'yes', collisions: [] });
     sheep.Start(petFile);
+    // Sheep DOM is created asynchronously after Start; sweep a couple of
+    // times so late nodes still get elevated above the windows.
+    setTimeout(sweepSheepNodes, 500);
+    setTimeout(sweepSheepNodes, 2000);
+}
+
+/**
+ * Preload the sheep engine during browser idle time so the first click on
+ * the eSheep icon doesn't pay the download cost. Safe to call repeatedly.
+ */
+export function warmESheepCache(): void {
+    if (getSheepClass() || document.querySelector(`script[src="${SHEEP_SCRIPT_SRC}"]`)) {
+        return;
+    }
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'script';
+    link.href = SHEEP_SCRIPT_SRC;
+    document.head.appendChild(link);
 }

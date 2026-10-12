@@ -178,8 +178,12 @@ function pickGhostDir(
     return best;
 }
 
-const Pacman: React.FC = () => {
+const Pacman: React.FC<{ paused?: boolean }> = ({ paused = false }) => {
     const canvasRef = React.useRef<HTMLCanvasElement>(null);
+    const ctxRef = React.useRef<CanvasRenderingContext2D | null>(null);
+    const staticLayerRef = React.useRef<HTMLCanvasElement | null>(null);
+    const pausedRef = React.useRef(paused);
+    pausedRef.current = paused;
     const wrapRef = React.useRef<HTMLDivElement>(null);
     const gridRef = React.useRef<string[][]>(buildGrid());
     const pacRef = React.useRef<Position>({ row: 17, col: 9 });
@@ -266,19 +270,43 @@ const Pacman: React.FC = () => {
         setDeathCountdown(0);
     }
 
-    function drawGrid(ctx: CanvasRenderingContext2D) {
+    function buildStaticLayer(): HTMLCanvasElement {
+        const layer = document.createElement('canvas');
+        layer.width = COLS * CELL;
+        layer.height = ROWS * CELL;
+        const ctx = layer.getContext('2d');
+        if (ctx) {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, layer.width, layer.height);
+            // Walls + gate never change, so render them once.
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    const cell = MAZE_ROWS[r][c];
+                    const x = c * CELL;
+                    const y = r * CELL;
+                    if (cell === WALL) {
+                        ctx.fillStyle = '#2121de';
+                        ctx.fillRect(x + 1, y + 1, CELL - 2, CELL - 2);
+                        ctx.fillStyle = '#0000aa';
+                        ctx.fillRect(x + 3, y + 3, CELL - 6, CELL - 6);
+                    } else if (cell === GATE) {
+                        ctx.fillStyle = '#ffb8ff';
+                        ctx.fillRect(x, y + CELL / 2 - 2, CELL, 4);
+                    }
+                }
+            }
+        }
+        return layer;
+    }
+
+    function drawDots(ctx: CanvasRenderingContext2D) {
         const grid = gridRef.current;
         for (let r = 0; r < ROWS; r++) {
             for (let c = 0; c < COLS; c++) {
                 const cell = grid[r][c];
                 const x = c * CELL;
                 const y = r * CELL;
-                if (cell === WALL) {
-                    ctx.fillStyle = '#2121de';
-                    ctx.fillRect(x + 1, y + 1, CELL - 2, CELL - 2);
-                    ctx.fillStyle = '#0000aa';
-                    ctx.fillRect(x + 3, y + 3, CELL - 6, CELL - 6);
-                } else if (cell === DOT) {
+                if (cell === DOT) {
                     ctx.fillStyle = '#ffb8ae';
                     ctx.beginPath();
                     ctx.arc(x + CELL / 2, y + CELL / 2, 2, 0, Math.PI * 2);
@@ -289,12 +317,16 @@ const Pacman: React.FC = () => {
                     ctx.beginPath();
                     ctx.arc(x + CELL / 2, y + CELL / 2, pulse, 0, Math.PI * 2);
                     ctx.fill();
-                } else if (cell === GATE) {
-                    ctx.fillStyle = '#ffb8ff';
-                    ctx.fillRect(x, y + CELL / 2 - 2, CELL, 4);
                 }
             }
         }
+    }
+
+    function draw(ctx: CanvasRenderingContext2D, alpha: number, now: number) {
+        ctx.drawImage(staticLayerRef.current ?? (staticLayerRef.current = buildStaticLayer()), 0, 0);
+        drawDots(ctx);
+        drawPacman(ctx, alpha, now);
+        drawGhosts(ctx, alpha, now);
     }
 
     const GHOST_TO_NAME: Record<string, string> = {
@@ -312,7 +344,7 @@ const Pacman: React.FC = () => {
         return 'right';
     }
 
-    function drawPacman(ctx: CanvasRenderingContext2D, alpha: number) {
+    function drawPacman(ctx: CanvasRenderingContext2D, alpha: number, now: number) {
         const pp = prevPacRef.current;
         const p = pacRef.current;
         const drawRow = lerp(pp.row, p.row, alpha);
@@ -327,7 +359,7 @@ const Pacman: React.FC = () => {
         else if (d.dc === 1) dirKey = 'right';
         const sprite = spriteSheetsRef.current[dirKey];
         if (sprite && sprite.complete && sprite.naturalWidth > 0) {
-            const frameIndex = Math.floor(performance.now() / 120) % 4;
+            const frameIndex = Math.floor(now / 120) % 4;
             ctx.drawImage(sprite, frameIndex * 16, 0, 16, 16, x + 2, y + 2, CELL - 4, CELL - 4);
         } else {
             ctx.fillStyle = '#ffe600';
@@ -345,6 +377,7 @@ const Pacman: React.FC = () => {
         frightened: boolean,
         flashing: boolean,
         eaten: boolean,
+        now: number,
     ) {
         const x = col * CELL;
         const y = row * CELL;
@@ -354,7 +387,7 @@ const Pacman: React.FC = () => {
         if (eaten) {
             spriteKey = `eyes_${dn}`;
         } else if (flashing) {
-            spriteKey = Math.floor(performance.now() / 200) % 2 === 0 ? 'scared_blue' : 'scared_white';
+            spriteKey = Math.floor(now / 200) % 2 === 0 ? 'scared_blue' : 'scared_white';
         } else if (frightened) {
             spriteKey = 'scared_blue';
         } else {
@@ -363,7 +396,7 @@ const Pacman: React.FC = () => {
 
         const sprite = spriteSheetsRef.current[spriteKey];
         if (sprite && sprite.complete && sprite.naturalWidth > 0) {
-            const frameIndex = Math.floor(performance.now() / 200) % 2;
+            const frameIndex = Math.floor(now / 200) % 2;
             ctx.drawImage(sprite, frameIndex * 16, 0, 16, 16, x + 2, y + 2, CELL - 4, CELL - 4);
         } else {
             ctx.fillStyle = eaten ? '#fff' : frightened ? '#2121de' : color;
@@ -373,7 +406,7 @@ const Pacman: React.FC = () => {
         }
     }
 
-    function drawGhosts(ctx: CanvasRenderingContext2D, alpha: number) {
+    function drawGhosts(ctx: CanvasRenderingContext2D, alpha: number, now: number) {
         for (let i = 0; i < ghostsRef.current.length; i++) {
             const g = ghostsRef.current[i];
             const pp = prevGhostsRef.current[i] || { row: g.row, col: g.col };
@@ -382,16 +415,8 @@ const Pacman: React.FC = () => {
             const frightened = g.mode === 'frightened';
             const flashing = frightened && frightenedTimerRef.current < 30 && frightenedTimerRef.current > 0;
             const eaten = g.mode === 'eaten';
-            drawGhostShape(ctx, drawCol, drawRow, g.color, g.dir, frightened && !flashing, flashing, eaten);
+            drawGhostShape(ctx, drawCol, drawRow, g.color, g.dir, frightened && !flashing, flashing, eaten, now);
         }
-    }
-
-    function draw(ctx: CanvasRenderingContext2D, alpha: number) {
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL);
-        drawGrid(ctx);
-        drawPacman(ctx, alpha);
-        drawGhosts(ctx, alpha);
     }
 
     function tick() {
@@ -593,6 +618,12 @@ const Pacman: React.FC = () => {
         let lastTime = 0;
         const TICK = 160;
         function loop(time: number) {
+            // Don't burn CPU when the window is minimized/unfocused or tab hidden.
+            if (pausedRef.current || document.hidden) {
+                lastTime = time;
+                animRef.current = requestAnimationFrame(loop);
+                return;
+            }
             if (time - lastTime >= TICK) {
                 if (time - lastTime > TICK * 3) lastTime = time;
                 prevPacRef.current = { ...pacRef.current };
@@ -603,8 +634,9 @@ const Pacman: React.FC = () => {
             const alpha = Math.min(1, (time - lastTime) / TICK);
             const canvas = canvasRef.current;
             if (canvas) {
-                const ctx = canvas.getContext('2d');
-                if (ctx) draw(ctx, alpha);
+                if (!ctxRef.current) ctxRef.current = canvas.getContext('2d');
+                const ctx = ctxRef.current;
+                if (ctx) draw(ctx, alpha, time);
             }
             animRef.current = requestAnimationFrame(loop);
         }

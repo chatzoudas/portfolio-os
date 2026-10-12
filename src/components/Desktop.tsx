@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import Taskbar from './Taskbar';
 import Window from './Window';
 import AboutMe from './apps/AboutMe';
-import Pacman from './apps/Pacman';
 import PopupMessage from './apps/PopupMessage';
-import Solitaire from './apps/Solitaire';
-import { spawnESheep } from './apps/esheep';
+import { spawnESheep, warmESheepCache } from './apps/esheep';
+
+// Heavy games are code-split so the initial bundle only contains the
+// desktop shell + About Me (which is open by default).
+const Pacman = React.lazy(() => import('./apps/Pacman'));
+const Solitaire = React.lazy(() => import('./apps/Solitaire'));
 
 
 
@@ -86,6 +89,21 @@ const Desktop: React.FC = () => {
     });
 
     useEffect(() => {
+        // Warm the on-demand eSheep engine during idle time so the first
+        // icon click doesn't pay the download cost.
+        const w = window as unknown as {
+            requestIdleCallback?: (cb: () => void) => number;
+            cancelIdleCallback?: (id: number) => void;
+        };
+        if (w.requestIdleCallback) {
+            const id = w.requestIdleCallback(() => warmESheepCache());
+            return () => w.cancelIdleCallback?.(id);
+        }
+        const timer = setTimeout(() => warmESheepCache(), 2000);
+        return () => clearTimeout(timer);
+    }, []);
+
+    useEffect(() => {
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('mobile')) {
             const newWindow: WindowState = {
@@ -108,17 +126,22 @@ const Desktop: React.FC = () => {
         }
     }, []);
 
-    const handleWindowFocus = (id: string) => {
-        setWindows(prevWindows => prevWindows.map(w => ({
-            ...w,
-            isActive: w.id === id,
-            focusSignal: w.id === id ? Date.now() : w.focusSignal
-        })));
-    };
+    const handleWindowFocus = useCallback((id: string) => {
+        setWindows(prevWindows => {
+            // Bail out without creating new objects when nothing changes.
+            const target = prevWindows.find(w => w.id === id);
+            if (target && target.isActive) return prevWindows;
+            return prevWindows.map(w => ({
+                ...w,
+                isActive: w.id === id,
+                focusSignal: w.id === id ? Date.now() : w.focusSignal
+            }));
+        });
+    }, []);
 
-    const handleWindowClose = (id: string) => {
+    const handleWindowClose = useCallback((id: string) => {
         setWindows(prev => prev.filter(w => w.id !== id));
-    };
+    }, []);
 
     const handleIconOpen = (appId: string) => {
         if (appId === 'esheep') {
@@ -172,7 +195,7 @@ const Desktop: React.FC = () => {
             case 'AboutMe':
                 return <AboutMe />;
             case 'Pacman':
-                return <Pacman />;
+                return <Pacman paused={!window.isActive} />;
             case 'PopupMessage':
                 return <PopupMessage />;
             case 'Solitaire':
@@ -197,7 +220,7 @@ const Desktop: React.FC = () => {
                             handleIconOpen(app.id);
                         }}
                     >
-                        <img className="desktop-icon-image" src={app.icon} alt={app.title} />
+                        <img className="desktop-icon-image" src={app.icon} alt={app.title} width={32} height={32} decoding="async" />
                         <span className="desktop-icon-text">{app.title}</span>
                     </div>
                 ))}
@@ -218,7 +241,9 @@ const Desktop: React.FC = () => {
                         onFocus={() => handleWindowFocus(window.id)}
                         onClose={() => handleWindowClose(window.id)}
                     >
-                        {renderWindowContent(window)}
+                        <Suspense fallback={<div style={{ padding: 20 }}>Loading…</div>}>
+                            {renderWindowContent(window)}
+                        </Suspense>
                     </Window>
                 ))}
             </div>

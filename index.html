@@ -6,7 +6,10 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
+    <meta name="description" content="Nick Chatzoudas portfolio presented as a retro Windows-style desktop OS with playable mini-apps." />
+    <meta name="theme-color" content="#121212" />
     <link rel="icon" type="image/webp" href="/icon.webp" />
+    <link rel="preload" as="image" href="/wallpaper.webp" fetchpriority="high" />
     <title>Chatzoudas-OS</title>
   </head>
   <body>
@@ -15,7 +18,7 @@
     <script>
       window.addEventListener("click", () => {
         window.parent.postMessage("click", "*");
-      });
+      }, { passive: true });
       window.addEventListener("keydown", (e) => {
         window.parent.postMessage({ type: "keydown", key: e.key }, "*");
       });

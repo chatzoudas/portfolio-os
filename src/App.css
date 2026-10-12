@@ -424,7 +424,20 @@ ul {
   margin-bottom: 6px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+}
+
+.sol98-btn-new {
+  margin-right: 10px;
+}
+
+.sol98-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 12px;
+  margin-left: 2px;
+  border-left: 2px solid rgba(0, 0, 0, 0.25);
 }
 
 .sol98-status {
@@ -542,6 +555,16 @@ ul {
 .sol98-card:hover {
   outline: 2px solid #ffdd00;
   cursor: pointer;
+}
+
+.sol98-card-hinted {
+  outline: 3px solid #00e5ff !important;
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.95) !important;
+}
+
+.sol98-pile-hinted {
+  outline: 2px dashed #00e5ff;
+  outline-offset: -2px;
 }
 
 .pac98-dpad {

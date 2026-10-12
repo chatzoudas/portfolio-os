@@ -162,11 +162,141 @@ const DESIGN_W = 518;
 const DESIGN_H = 530;
 const MAX_SCALE = 4;
 
+interface HintDestTableau {
+    type: 'tableau';
+    pileIndex: number;
+}
+
+type HintLoc =
+    | { type: 'waste' }
+    | { type: 'tableau'; pileIndex: number; cardIndex?: number }
+    | { type: 'foundation'; suit: Suit }
+    | { type: 'stock' };
+
+interface Hint {
+    source: HintLoc;
+    dest: HintLoc | null;
+    message: string;
+}
+
+function cardName(card: Card): string {
+    return `${rankLabel(card.rank)}${card.suit}`;
+}
+
+function canPlaceOnTableau(card: Card, destColumn: Card[]): boolean {
+    if (destColumn.length === 0) return card.rank === 13;
+    const top = destColumn[destColumn.length - 1];
+    return suitColor(top.suit) !== suitColor(card.suit) && top.rank === card.rank + 1;
+}
+
+function canPlaceOnFoundation(card: Card, foundations: Record<Suit, Card[]>): boolean {
+    const pile = foundations[card.suit];
+    const topRank = pile.length ? pile[pile.length - 1].rank : 0;
+    return card.rank === topRank + 1;
+}
+
+function findHint(state: BoardState): Hint | null {
+    if (state.waste.length > 0) {
+        const card = state.waste[state.waste.length - 1];
+        if (canPlaceOnFoundation(card, state.foundations)) {
+            return {
+                source: { type: 'waste' },
+                dest: { type: 'foundation', suit: card.suit },
+                message: `Move ${cardName(card)} from waste to foundation`,
+            };
+        }
+    }
+
+    for (let pileIndex = 0; pileIndex < state.tableau.length; pileIndex += 1) {
+        const column = state.tableau[pileIndex];
+        if (column.length === 0) continue;
+        const card = column[column.length - 1];
+        if (!card.faceUp) continue;
+        if (canPlaceOnFoundation(card, state.foundations)) {
+            return {
+                source: { type: 'tableau', pileIndex, cardIndex: column.length - 1 },
+                dest: { type: 'foundation', suit: card.suit },
+                message: `Move ${cardName(card)} to foundation`,
+            };
+        }
+    }
+
+    if (state.waste.length > 0) {
+        const card = state.waste[state.waste.length - 1];
+        for (let pileIndex = 0; pileIndex < state.tableau.length; pileIndex += 1) {
+            if (canPlaceOnTableau(card, state.tableau[pileIndex])) {
+                return {
+                    source: { type: 'waste' },
+                    dest: { type: 'tableau', pileIndex },
+                    message: `Move ${cardName(card)} from waste to column ${pileIndex + 1}`,
+                };
+            }
+        }
+    }
+
+    const tableauMoves: { source: HintLoc; dest: HintDestTableau; uncovers: boolean; movingCount: number }[] = [];
+    for (let pileIndex = 0; pileIndex < state.tableau.length; pileIndex += 1) {
+        const column = state.tableau[pileIndex];
+        for (let cardIndex = 0; cardIndex < column.length; cardIndex += 1) {
+            if (!column[cardIndex].faceUp) continue;
+            const moving = column.slice(cardIndex);
+            const firstCard = moving[0];
+            for (let destIndex = 0; destIndex < state.tableau.length; destIndex += 1) {
+                if (destIndex === pileIndex) continue;
+                if (!canPlaceOnTableau(firstCard, state.tableau[destIndex])) continue;
+                if (cardIndex === 0 && state.tableau[destIndex].length === 0) continue;
+                const uncovers = cardIndex > 0 && !column[cardIndex - 1].faceUp;
+                tableauMoves.push({
+                    source: { type: 'tableau', pileIndex, cardIndex },
+                    dest: { type: 'tableau', pileIndex: destIndex },
+                    uncovers,
+                    movingCount: moving.length,
+                });
+            }
+        }
+    }
+    tableauMoves.sort((a, b) => Number(b.uncovers) - Number(a.uncovers) || b.movingCount - a.movingCount);
+    if (tableauMoves.length > 0) {
+        const best = tableauMoves[0];
+        const card = state.tableau[best.source.pileIndex as number][best.source.cardIndex as number];
+        return {
+            source: best.source,
+            dest: best.dest,
+            message: `Move ${cardName(card)} to column ${(best.dest.pileIndex as number) + 1}`,
+        };
+    }
+
+    for (const suit of SUITS) {
+        const pile = state.foundations[suit];
+        if (pile.length === 0) continue;
+        const card = pile[pile.length - 1];
+        for (let pileIndex = 0; pileIndex < state.tableau.length; pileIndex += 1) {
+            if (canPlaceOnTableau(card, state.tableau[pileIndex])) {
+                return {
+                    source: { type: 'foundation', suit },
+                    dest: { type: 'tableau', pileIndex },
+                    message: `Move ${cardName(card)} back from foundation to column ${pileIndex + 1}`,
+                };
+            }
+        }
+    }
+
+    if (state.stock.length > 0) {
+        return { source: { type: 'stock' }, dest: { type: 'stock' }, message: 'Draw a card from the stock' };
+    }
+    if (state.waste.length > 0) {
+        return { source: { type: 'stock' }, dest: { type: 'stock' }, message: 'Recycle the waste pile' };
+    }
+
+    return null;
+}
+
 interface SolCardProps {
     card: Card;
     source: DragSource;
     active?: boolean;
     ghosted?: boolean;
+    hinted?: boolean;
     top?: number;
     onPointerDown: (source: DragSource, event: React.PointerEvent) => void;
     onClick: (source: DragSource, event: React.MouseEvent) => void;
@@ -180,6 +310,7 @@ function solCardEqual(prev: SolCardProps, next: SolCardProps): boolean {
         prev.card.faceUp === next.card.faceUp &&
         prev.active === next.active &&
         prev.ghosted === next.ghosted &&
+        prev.hinted === next.hinted &&
         prev.top === next.top &&
         prev.source.type === next.source.type &&
         prev.source.pileIndex === next.source.pileIndex &&
@@ -187,14 +318,11 @@ function solCardEqual(prev: SolCardProps, next: SolCardProps): boolean {
     );
 }
 
-// Memoized so a move re-renders only the cards that changed, not all 52.
-// Callbacks are stable (dispatch through latest-handler refs), so comparing
-// data fields is sufficient and stale closures are impossible.
 const SolCard = React.memo(function SolCard(props: SolCardProps) {
-    const { card, source, active, ghosted, top, onPointerDown, onClick, onDoubleClick } = props;
+    const { card, source, active, ghosted, hinted, top, onPointerDown, onClick, onDoubleClick } = props;
     return (
         <div
-            className={`sol98-card sol98-card-${suitColor(card.suit)} ${active ? 'sol98-card-selected' : ''}`}
+            className={`sol98-card sol98-card-${suitColor(card.suit)}${active ? ' sol98-card-selected' : ''}${hinted ? ' sol98-card-hinted' : ''}`}
             style={top !== undefined ? { top: `${top}px`, zIndex: top / 20, ...(ghosted ? { opacity: 0.35 } : {}) } : ghosted ? { opacity: 0.35 } : undefined}
             onPointerDown={event => onPointerDown(source, event)}
             onClick={event => onClick(source, event)}
@@ -227,6 +355,7 @@ const Solitaire: React.FC = () => {
     const [scale, setScale] = React.useState(1);
     const [autoSorting, setAutoSorting] = React.useState(false);
     const [autoSuppressed, setAutoSuppressed] = React.useState(false);
+    const [hint, setHint] = React.useState<Hint | null>(null);
     const boardRef = React.useRef(board);
     const shellRef = React.useRef<HTMLDivElement>(null);
     const [floatDrag, setFloatDrag] = React.useState<DragFloat | null>(null);
@@ -257,6 +386,7 @@ const Solitaire: React.FC = () => {
         if (next === snapshot) return;
         boardRef.current = next;
         setBoard(next);
+        setHint(null);
         if (recordHistory) {
             setPast(previous => [...previous.slice(-99), snapshot]);
         }
@@ -278,6 +408,7 @@ const Solitaire: React.FC = () => {
         setPast([]);
         setStatus('');
         setSelectedSource(null);
+        setHint(null);
         setAutoSorting(false);
         setAutoSuppressed(false);
     };
@@ -289,19 +420,60 @@ const Solitaire: React.FC = () => {
         setBoard(previous);
         setPast(past.slice(0, -1));
         setSelectedSource(null);
+        setHint(null);
         setAutoSorting(false);
         setAutoSuppressed(true);
         setStatus(getTotalFoundationCards(previous.foundations) === 52 ? 'You win!' : '');
     };
 
+    const showHint = () => {
+        if (autoSorting) return;
+        const found = findHint(boardRef.current);
+        if (!found) {
+            setHint(null);
+            setStatus('No moves found — try Undo or New Game');
+            return;
+        }
+        setHint(found);
+        setSelectedSource(null);
+        setStatus(`Hint: ${found.message}`);
+    };
+
+    const isHintedCard = (source: DragSource) => {
+        if (!hint) return false;
+        const s = hint.source;
+        if (s.type === 'waste') return source.type === 'waste';
+        if (s.type === 'tableau' && source.type === 'tableau') {
+            return (
+                s.pileIndex === source.pileIndex &&
+                s.cardIndex !== undefined &&
+                (source.cardIndex as number) >= s.cardIndex
+            );
+        }
+        return false;
+    };
+
+    const isHintedPile = (kind: 'stock' | 'foundation' | 'tableau', key?: string | number) => {
+        if (!hint) return false;
+        const check = (loc: HintLoc | null) => {
+            if (!loc) return false;
+            if (kind === 'stock') return loc.type === 'stock';
+            if (kind === 'foundation') return loc.type === 'foundation' && loc.suit === key;
+            return loc.type === 'tableau' && loc.pileIndex === key;
+        };
+        return check(hint.source) || check(hint.dest);
+    };
+
     const stopAutoSorting = () => {
         setAutoSorting(false);
         setAutoSuppressed(true);
+        setHint(null);
         setStatus('');
     };
 
     const startAutoSorting = () => {
         setSelectedSource(null);
+        setHint(null);
         setAutoSuppressed(false);
         setAutoSorting(true);
         setStatus('Auto-sorting...');
@@ -335,6 +507,7 @@ const Solitaire: React.FC = () => {
     const handleCardTap = (source: DragSource, event?: React.MouseEvent) => {
         if (autoSorting) return;
         if (event) event.stopPropagation();
+        setHint(null);
         if (!selectedSource) {
             setSelectedSource(source);
             return;
@@ -500,8 +673,6 @@ const Solitaire: React.FC = () => {
         }
     };
 
-    // Mirrors of state for the stable callbacks below (which keep a constant
-    // identity so memoized cards don't re-render when handlers don't change).
     const autoSortingRef = React.useRef(autoSorting);
     React.useEffect(() => {
         autoSortingRef.current = autoSorting;
@@ -527,6 +698,7 @@ const Solitaire: React.FC = () => {
         floatDragRef.current = drag;
         setFloatDrag(drag);
         setSelectedSource(null);
+        setHint(null);
     }, []);
 
     const isDragGhosted = (source: DragSource) => {
@@ -537,9 +709,6 @@ const Solitaire: React.FC = () => {
         return drag.source.pileIndex === source.pileIndex && (source.cardIndex as number) >= (drag.source.cardIndex as number);
     };
 
-    // Latest-handler refs so the global pointer listeners below can subscribe
-    // once ([]) yet always call the current logic (avoids re-subscribing on
-    // every board change, which was the previous behavior with no dep array).
     const handleCardTapRef = React.useRef(handleCardTap);
     const dropFloatAtRef = React.useRef(dropFloatAt);
     const tryAutoFoundationRef = React.useRef(tryAutoFoundation);
@@ -566,7 +735,6 @@ const Solitaire: React.FC = () => {
             const drag = floatDragRef.current;
             if (!drag || event.pointerType !== 'mouse') return;
             const moved = drag.moved || Math.hypot(event.clientX - drag.sx, event.clientY - drag.sy) > 6;
-            // Skip state update when nothing changed to avoid extra renders.
             if (drag.moved === moved && drag.x === event.clientX && drag.y === event.clientY) return;
             setFloat({ ...drag, x: event.clientX, y: event.clientY, moved });
         };
@@ -633,8 +801,11 @@ const Solitaire: React.FC = () => {
         <div className="sol98-shell" ref={shellRef}>
             <div style={scale > 1 ? { width: DESIGN_W, zoom: scale, margin: '0 auto' } : undefined}>
             <div className="sol98-toolbar">
-                <button onClick={newGame}>New Game</button>
-                <button onClick={undo} disabled={past.length === 0 || autoSorting}>Undo</button>
+                <button className="sol98-btn-new" onClick={newGame}>New Game</button>
+                <div className="sol98-btn-group">
+                    <button onClick={undo} disabled={past.length === 0 || autoSorting}>Undo</button>
+                    <button onClick={showHint} disabled={autoSorting} title="Show a possible move">Hint</button>
+                </div>
                 {autoSorting ? (
                     <button onClick={stopAutoSorting}>Stop Auto</button>
                 ) : (
@@ -645,7 +816,10 @@ const Solitaire: React.FC = () => {
 
             <div className="sol98-board">
                 <div className="sol98-row">
-                    <div className="sol98-pile" onClick={drawStock}>
+                    <div
+                        className={`sol98-pile${isHintedPile('stock') ? ' sol98-pile-hinted' : ''}`}
+                        onClick={drawStock}
+                    >
                         {board.stock.length ? (
                             <div className="sol98-card sol98-card-back" />
                         ) : (
@@ -663,6 +837,7 @@ const Solitaire: React.FC = () => {
                                     source={WASTE_SOURCE}
                                     active={active}
                                     ghosted={isDragGhosted(WASTE_SOURCE)}
+                                    hinted={isHintedCard(WASTE_SOURCE)}
                                     onPointerDown={stablePointerDown}
                                     onClick={stableClick}
                                     onDoubleClick={stableDoubleClick}
@@ -676,15 +851,16 @@ const Solitaire: React.FC = () => {
                     {SUITS.map(suit => {
                         const pile = board.foundations[suit];
                         const topCard = pile[pile.length - 1];
+                        const pileHinted = isHintedPile('foundation', suit);
                         return (
                             <div
                                 key={suit}
-                                className="sol98-pile"
+                                className={`sol98-pile${pileHinted ? ' sol98-pile-hinted' : ''}`}
                                 data-sol-drop={`foundation:${suit}`}
                                 onClick={() => handlePileTap({ type: 'foundation', suit })}
                             >
                                 {topCard ? (
-                                    <div className={`sol98-card sol98-card-${suitColor(topCard.suit)}`}>
+                                    <div className={`sol98-card sol98-card-${suitColor(topCard.suit)}${pileHinted ? ' sol98-card-hinted' : ''}`}>
                                         <div className="sol98-corner">{rankLabel(topCard.rank)}{topCard.suit}</div>
                                         <div className="sol98-center">{topCard.suit}</div>
                                     </div>
@@ -700,7 +876,7 @@ const Solitaire: React.FC = () => {
                     {board.tableau.map((column, columnIndex) => (
                         <div
                             key={`column-${columnIndex}`}
-                            className="sol98-pile sol98-pile-tableau"
+                            className={`sol98-pile sol98-pile-tableau${isHintedPile('tableau', columnIndex) ? ' sol98-pile-hinted' : ''}`}
                             data-sol-drop={`tableau:${columnIndex}`}
                             onClick={() => {
                                 if (column.length === 0) {
@@ -727,6 +903,7 @@ const Solitaire: React.FC = () => {
                                         source={cardSource}
                                         active={active}
                                         ghosted={isDragGhosted(cardSource)}
+                                        hinted={isHintedCard(cardSource)}
                                         top={cardIndex * 20}
                                         onPointerDown={stablePointerDown}
                                         onClick={stableClick}

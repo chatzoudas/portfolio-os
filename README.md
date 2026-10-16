@@ -3,7 +3,6 @@
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)
-![Vercel](https://img.shields.io/badge/Vercel-black?logo=vercel&logoColor=white)
 
 A retro Windows-style desktop OS that serves as my interactive portfolio. Drag windows, open apps, and play fully working mini-games.
 
